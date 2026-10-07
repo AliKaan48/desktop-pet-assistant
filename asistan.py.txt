@@ -1,0 +1,177 @@
+import sys
+import random
+import requests
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QMenu, QVBoxLayout, QInputDialog
+from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtGui import QFont, QAction, QCursor
+
+class DesktopPet(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # Yüz ifadeleri: (Açık Göz, Kapalı Göz)
+        self.faces = [
+            ("(◕_◕)", "(-_-)"),  # Normal
+            ("(^.^)", "(-.-)"),  # Mutlu
+            ("(◣_◢)", "(-_-)"),  # Sinirli
+            ("(T_T)", "(-_-)"),  # Üzgün
+            ("(ಠ_ಠ)", "(-_-)")   # Şüpheci
+        ]
+        self.current_face_idx = 0
+        self.city = ""
+        self.is_showing_info = False # Ekranda saat/hava durumu varken göz kırpmayı engeller
+
+        self.initUI()
+        self.initTimers()
+
+    def initUI(self):
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
+                            Qt.WindowType.WindowStaysOnTopHint | 
+                            Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        self.resize(140, 140)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Ekran Etiketi (Yazılar kalktığı için yüz fontunu 22pt yaptık)
+        self.label = QLabel(self.faces[0][0], self)
+        self.label.setFont(QFont("Consolas", 22, QFont.Weight.Bold))
+        self.label.setStyleSheet("""
+            background-color: #1e1e1e;
+            color: #00FFcc;
+            border: 3px solid #00FFcc;
+            border-radius: 20px;
+            padding: 10px;
+        """)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.label)
+
+        self.setLayout(layout)
+        self.old_pos = None
+
+    def initTimers(self):
+        # --- GÖZ KIRPMA (BLINK) ZAMANLAYICISI ---
+        self.blink_timer = QTimer(self)
+        self.blink_timer.timeout.connect(self.blink)
+        self.blink_timer.start(3500) # 3.5 saniyede bir çalışır
+
+        # --- SAAT VE HAVA DURUMU ZAMANLAYICILARI ---
+        self.clock_timer = QTimer(self)
+        self.clock_timer.timeout.connect(self.show_clock)
+        self.clock_timer.start(5 * 60 * 1000) 
+
+        self.weather_timer = QTimer(self)
+        self.weather_timer.timeout.connect(self.show_weather)
+        self.weather_timer.start(30 * 60 * 1000)
+
+    # --- GÖZ KIRPMA MANTIĞI ---
+    def blink(self):
+        if self.is_showing_info: return 
+        # Gözleri kapat
+        self.label.setText(self.faces[self.current_face_idx][1])
+        # 150 milisaniye (0.15 saniye) sonra geri aç
+        QTimer.singleShot(150, self.unblink)
+
+    def unblink(self):
+        if self.is_showing_info: return
+        # Gözleri aç
+        self.label.setText(self.faces[self.current_face_idx][0])
+
+    # --- ETKİLEŞİM HAREKETLERİ ---
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Sol Tık: Yüz ifadesini değiştir
+            self.current_face_idx = (self.current_face_idx + 1) % len(self.faces)
+            if not self.is_showing_info:
+                self.label.setText(self.faces[self.current_face_idx][0])
+            self.old_pos = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event):
+        # Fareyle sürükleme
+        if self.old_pos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            delta = QPoint(event.globalPosition().toPoint() - self.old_pos)
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            self.old_pos = event.globalPosition().toPoint()
+
+    def mouseReleaseEvent(self, event):
+        self.old_pos = None
+
+    def contextMenuEvent(self, event):
+        # Sağ Tık Menüsü
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #282c34; color: white; border: 1px solid #00FFcc; }
+            QMenu::item:selected { background-color: #00FFcc; color: black; }
+        """)
+
+        act_fun = QAction("🎲 Rastgele Sayı", self)
+        act_fun.triggered.connect(lambda: self.show_on_screen(f"🎲 Şans:\n{random.randint(1, 100)}"))
+
+        act_clock = QAction("⏰ Saati Göster", self)
+        act_clock.triggered.connect(self.show_clock)
+
+        act_weather = QAction("🌤️ Hava Durumu", self)
+        act_weather.triggered.connect(self.show_weather)
+
+        act_change_city = QAction("🏙️ Şehir Değiştir", self)
+        act_change_city.triggered.connect(self.change_city)
+
+        act_exit = QAction("❌ Kapat", self)
+        act_exit.triggered.connect(QApplication.instance().quit)
+
+        menu.addAction(act_fun)
+        menu.addAction(act_clock)
+        menu.addAction(act_weather)
+        menu.addAction(act_change_city)
+        menu.addSeparator()
+        menu.addAction(act_exit)
+
+        menu.exec(QCursor.pos())
+
+    # --- BİLDİRİM VE EKRAN DEĞİŞİM MANTIĞI ---
+    def show_clock(self):
+        from datetime import datetime
+        now = datetime.now().strftime("%H:%M")
+        self.show_on_screen(f"⏰\n{now}")
+
+    def show_weather(self):
+        try:
+            url = f"https://wttr.in/{self.city}?format=%l\n%C+%t" if self.city else "https://wttr.in/?format=%l\n%C+%t"
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                self.show_on_screen(f"🌤️\n{res.text.strip()}")
+            else:
+                self.show_on_screen("🌤️\nHata")
+        except:
+            self.show_on_screen("Bağlantı\nHatası")
+
+    def change_city(self):
+        text, ok = QInputDialog.getText(self, "Şehir Seçimi", "Şehir ismi yazın (Otomatik konum için boş bırakın):")
+        if ok:
+            self.city = text.strip()
+            msg = f"{self.city.capitalize()}" if self.city else "Otomatik\n(IP)"
+            self.show_on_screen(msg)
+            QTimer.singleShot(2500, self.show_weather)
+
+    def show_on_screen(self, text):
+        self.is_showing_info = True # Ekrandaki metin bitene kadar göz kırpmayı engeller
+        
+        # Metinlerin sığması için fontu geçici olarak küçültür (12pt)
+        self.label.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        self.label.setText(text)
+        
+        # 4 saniye sonra ekranı temizle
+        QTimer.singleShot(4000, self.restore_face)
+
+    def restore_face(self):
+        self.is_showing_info = False
+        # Fontu tekrar yüz ifadesi boyutuna (22pt) büyütür ve gözleri açar
+        self.label.setFont(QFont("Consolas", 22, QFont.Weight.Bold))
+        self.unblink()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    pet = DesktopPet()
+    pet.show()
+    sys.exit(app.exec())
